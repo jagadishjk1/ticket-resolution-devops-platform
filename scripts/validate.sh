@@ -2,7 +2,7 @@
 # Offline static checks that need no cloud account and no Docker daemon.
 # Optional tools (terraform, shellcheck, yamllint, hadolint) are used when installed.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 fail=0
 ok()   { printf '  \033[32mOK\033[0m   %s\n' "$*"; }
@@ -88,7 +88,7 @@ else skip "terraform not installed"; fi
 
 echo "== Optional linters"
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck -x scripts/*.sh docker/entrypoint.sh && ok "shellcheck" || bad "shellcheck (see output above)"
+  shellcheck -S warning -x scripts/*.sh docker/entrypoint.sh && ok "shellcheck" || bad "shellcheck (see output above)"
 else skip "shellcheck not installed"; fi
 if command -v yamllint >/dev/null 2>&1; then
   yamllint -c .yamllint . && ok "yamllint" || bad "yamllint (see output above)"

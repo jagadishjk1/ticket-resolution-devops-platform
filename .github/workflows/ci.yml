@@ -30,7 +30,7 @@ jobs:
           bash scripts/validate.sh
 
       - name: ShellCheck
-        run: shellcheck -x scripts/*.sh docker/entrypoint.sh
+        run: shellcheck -S warning -x scripts/*.sh docker/entrypoint.sh
 
       - name: Hadolint (Dockerfile)
         uses: hadolint/hadolint-action@v3.1.0

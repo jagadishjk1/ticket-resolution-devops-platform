@@ -16,7 +16,7 @@ echo "Smoke test -> $BASE"
 
 # 1. /health must become 200 (returns 503 until the knowledge base is loaded)
 ok=0
-for i in $(seq 1 "$RETRIES"); do
+for _ in $(seq 1 "$RETRIES"); do
   code="$(curl -s -o /tmp/smoke_health.json -w '%{http_code}' --max-time 5 "$BASE/health" || true)"
   if [ "$code" = "200" ]; then ok=1; break; fi
   sleep 5
