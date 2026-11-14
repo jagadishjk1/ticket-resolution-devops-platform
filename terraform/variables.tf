@@ -84,3 +84,20 @@ variable "app_ingress_cidrs" {
   type        = list(string)
   default     = ["0.0.0.0/0"]
 }
+
+variable "hosted_zone_name" {
+  description = "Existing PUBLIC Route53 hosted zone, e.g. longsea.online. Empty = no DNS records."
+  type        = string
+  default     = ""
+}
+
+variable "app_subdomain" {
+  description = "Subdomain for the app inside the zone (ticket -> ticket.longsea.online)."
+  type        = string
+  default     = "ticket"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", var.app_subdomain))
+    error_message = "app_subdomain must be a single DNS label: lowercase letters, digits and hyphens."
+  }
+}

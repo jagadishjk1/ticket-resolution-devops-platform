@@ -72,6 +72,32 @@ ssh ubuntu@<manager_ip> 'docker node ls'        # expect 1 manager + N workers, 
 ssh ubuntu@<manager_ip> 'tail -n 20 /var/log/swarm-bootstrap.log'
 ```
 
+### 2.2b Optional: friendly DNS names with Route53
+
+If you have an existing **public** hosted zone, set in `terraform.tfvars`:
+
+```hcl
+hosted_zone_name = "longsea.online"
+app_subdomain    = "ticket"
+```
+
+Terraform then creates A records pointing at the manager's Elastic IP:
+
+| Name | Use |
+|---|---|
+| `ticket.longsea.online` | Application |
+| `grafana.ticket.longsea.online` | Grafana (port 3000) |
+| `prometheus.ticket.longsea.online` | Prometheus (port 9090) |
+| `alerts.ticket.longsea.online` | Alertmanager (port 9093) |
+
+Notes:
+- The zone is only looked up; Terraform never creates or changes it. `terraform destroy` removes just the four records.
+- The zone must be public and the domain's registrar nameservers must point to it (`dig NS <domain> +short`).
+- If a record with the same name already exists, `apply` fails instead of overwriting it.
+- `admin_cidrs` is still required: the firewall allow-list is by IP, not by name.
+- Needed IAM permissions: `route53:ListHostedZonesByName`, `route53:GetHostedZone`, `route53:ListResourceRecordSets`, `route53:ChangeResourceRecordSets`, `route53:GetChange`.
+- Still plain HTTP. HTTPS (reverse proxy + Let's Encrypt) is listed under future scope.
+
 ### 2.3 Get an image
 
 Either let CI build it (push the repo to GitHub, see §3) or build and push your own:

@@ -58,6 +58,7 @@ graph TD
 | IAM roles/profiles, SSM parameters | `iam.tf` | Manager can write, workers can only read `/<project>/<env>/swarm/*`. SSM Session Manager enabled. |
 | Manager instance + Elastic IP | `compute.tf` | IMDSv2 only, encrypted gp3, `ignore_changes = [ami, user_data]` so it is never replaced implicitly. |
 | Worker launch template + ASG | `compute.tf` | Self-healing; rolling instance refresh on template change. |
+| Optional DNS records | `dns.tf` | A records in an existing public Route53 zone (app, Grafana, Prometheus, Alertmanager) pointing at the manager's Elastic IP. Off unless `hosted_zone_name` is set. |
 | Node bootstrap | `templates/*.tftpl` | Installs Docker + AWS CLI; manager runs `swarm init`; workers poll SSM then `swarm join`. |
 
 ### How the cluster forms without manual steps

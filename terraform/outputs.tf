@@ -46,3 +46,8 @@ output "worker_autoscaling_group" {
 output "vpc_id" {
   value = aws_vpc.main.id
 }
+
+output "dns_names" {
+  description = "Route53 names pointing at the manager (empty when hosted_zone_name is not set)."
+  value       = { for k, r in aws_route53_record.this : k => r.fqdn }
+}

@@ -13,3 +13,8 @@ public_key_path = "~/.ssh/id_ed25519.pub"
 manager_instance_type = "t3.medium"
 worker_instance_type  = "t3.small"
 worker_count          = 2
+
+# Optional: friendly DNS names in an existing PUBLIC Route53 hosted zone.
+# Creates ticket.<zone>, grafana.ticket.<zone>, prometheus.ticket.<zone>, alerts.ticket.<zone>
+# hosted_zone_name = "longsea.online"
+# app_subdomain    = "ticket"
