@@ -81,7 +81,7 @@ jobs:
       - name: Frontend unit tests
         working-directory: app/frontend
         run: |
-          npm ci
+          npm install --no-audit --no-fund
           npm run test:run
 
       - name: Frontend production build
