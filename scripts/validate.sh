@@ -88,13 +88,13 @@ else skip "terraform not installed"; fi
 
 echo "== Optional linters"
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck -x scripts/*.sh docker/entrypoint.sh && ok "shellcheck" || bad "shellcheck"
+  shellcheck -x scripts/*.sh docker/entrypoint.sh && ok "shellcheck" || bad "shellcheck (see output above)"
 else skip "shellcheck not installed"; fi
 if command -v yamllint >/dev/null 2>&1; then
-  yamllint -c .yamllint . >/dev/null 2>&1 && ok "yamllint" || bad "yamllint"
+  yamllint -c .yamllint . && ok "yamllint" || bad "yamllint (see output above)"
 else skip "yamllint not installed"; fi
 if command -v hadolint >/dev/null 2>&1; then
-  hadolint docker/Dockerfile && ok "hadolint" || bad "hadolint"
+  hadolint docker/Dockerfile && ok "hadolint" || bad "hadolint (see output above)"
 else skip "hadolint not installed"; fi
 
 echo
