@@ -56,7 +56,7 @@ jobs:
           tflint
 
       - name: IaC & Dockerfile misconfiguration scan (report only)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: config
           scan-ref: .
@@ -139,7 +139,7 @@ jobs:
           RETRIES=24 bash scripts/smoke-test.sh http://localhost:8000 || { docker logs app; exit 1; }
 
       - name: Image vulnerability scan (fail on fixable CRITICAL)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ticket-resolution:ci
           severity: CRITICAL
