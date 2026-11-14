@@ -1,0 +1,3 @@
+# Keep shell scripts and Terraform templates on LF so they run on Linux nodes and in WSL
+*.sh text eol=lf
+*.tftpl text eol=lf
