@@ -1,0 +1,33 @@
+# Maps the upstream app's JSON endpoints to Prometheus metrics.
+# Only keys that are ALWAYS present are used (the app returns a reduced
+# document when no query has been served yet), so scrapes never fail on an idle app.
+#
+#   GET /api/metrics           -> module ticket_summary
+#   GET /api/metrics/realtime  -> module ticket_realtime
+modules:
+  ticket_summary:
+    metrics:
+      - name: ticket_queries_total
+        type: value
+        help: Total resolution queries served by this replica since start
+        path: '{ .total_queries }'
+        valuetype: counter
+      - name: ticket_success_ratio
+        type: value
+        help: Fraction of successful queries (0 when idle)
+        path: '{ .success_rate }'
+
+  ticket_realtime:
+    metrics:
+      - name: ticket_recent_queries
+        type: value
+        help: Number of queries in the rolling window (max 100)
+        path: '{ .recent_queries }'
+      - name: ticket_recent_avg_response_ms
+        type: value
+        help: Average response time (milliseconds) over the rolling window
+        path: '{ .avg_response_time }'
+      - name: ticket_recent_avg_confidence
+        type: value
+        help: Average RAG confidence over the rolling window
+        path: '{ .avg_confidence }'

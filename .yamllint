@@ -1,0 +1,10 @@
+extends: relaxed
+ignore: |
+  app/
+  terraform/.terraform/
+rules:
+  line-length: disable
+  truthy:
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1

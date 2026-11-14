@@ -1,0 +1,96 @@
+name: Deploy to Swarm
+
+# Runs after CI succeeds on main, or manually for any image tag (also used for rollback).
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to deploy (e.g. sha-abc1234 or latest). Re-run with an older tag to roll back."
+        required: true
+        default: latest
+
+permissions:
+  id-token: write   # OIDC to AWS
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: production        # add required reviewers in repo settings for a manual approval gate
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      SWARM_HOST: ${{ vars.SWARM_MANAGER_IP }}
+      SWARM_SG_ID: ${{ vars.SWARM_SECURITY_GROUP_ID }}
+      GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}   # optional: only for private images
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Resolve image
+        id: image
+        run: |
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.image_tag }}"
+          else
+            sha="${{ github.event.workflow_run.head_sha }}"
+            tag="sha-${sha:0:7}"
+          fi
+          echo "ref=ghcr.io/${owner}/ticket-resolution:${tag}" >> "$GITHUB_OUTPUT"
+
+      # GitHub-hosted runners have changing IPs, so SSH (port 22) is opened for this
+      # runner only, for the duration of the job, and always closed again.
+      - name: Configure AWS credentials (OIDC, no stored keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Open SSH for this runner
+        run: |
+          RUNNER_IP="$(curl -fsS https://checkip.amazonaws.com)"
+          echo "RUNNER_CIDR=${RUNNER_IP}/32" >> "$GITHUB_ENV"
+          aws ec2 authorize-security-group-ingress --group-id "$SWARM_SG_ID" \
+            --protocol tcp --port 22 --cidr "${RUNNER_IP}/32"
+
+      - name: Prepare SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.SWARM_SSH_PRIVATE_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "$SWARM_HOST" >> ~/.ssh/known_hosts
+          printf 'Host *\n  IdentityFile ~/.ssh/id_deploy\n  ServerAliveInterval 30\n' > ~/.ssh/config
+
+      - name: Registry login on the manager (only needed for private images)
+        if: env.GHCR_PULL_TOKEN != ''
+        env:
+          DOCKER_HOST: ssh://ubuntu@${{ vars.SWARM_MANAGER_IP }}
+        run: echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
+
+      - name: Deploy stack
+        env:
+          DOCKER_HOST: ssh://ubuntu@${{ vars.SWARM_MANAGER_IP }}
+          APP_IMAGE: ${{ steps.image.outputs.ref }}
+          HUGGINGFACE_API_TOKEN: ${{ secrets.HUGGINGFACE_API_TOKEN }}
+        run: ./scripts/deploy.sh
+
+      - name: Smoke test
+        run: ./scripts/smoke-test.sh "http://${SWARM_HOST}"
+
+      - name: Close SSH for this runner
+        if: always()
+        run: |
+          if [ -n "${RUNNER_CIDR:-}" ]; then
+            aws ec2 revoke-security-group-ingress --group-id "$SWARM_SG_ID" \
+              --protocol tcp --port 22 --cidr "$RUNNER_CIDR" || true
+          fi

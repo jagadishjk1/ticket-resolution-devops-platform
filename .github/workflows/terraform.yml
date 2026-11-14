@@ -1,0 +1,112 @@
+name: Terraform
+
+on:
+  pull_request:
+    paths: ["terraform/**", ".github/workflows/terraform.yml"]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "plan, apply or destroy"
+        required: true
+        default: plan
+        type: choice
+        options: [plan, apply, destroy]
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: terraform
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: terraform
+
+env:
+  TF_VAR_region: ${{ vars.AWS_REGION }}
+  TF_VAR_admin_cidrs: ${{ vars.TF_ADMIN_CIDRS }}   # JSON list, e.g. ["203.0.113.10/32"]
+  TF_VAR_public_key_path: ${{ github.workspace }}/ci_key.pub
+
+jobs:
+  # Read-only: runs on pull requests (not from forks) and on manual "plan".
+  plan:
+    name: Plan
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
+      (github.event_name == 'workflow_dispatch' && inputs.action == 'plan')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Prepare inputs
+        run: |
+          printf '%s\n' "${{ secrets.SWARM_SSH_PUBLIC_KEY }}" > "${{ github.workspace }}/ci_key.pub"
+          cat > backend.tf <<BACKEND
+          terraform {
+            backend "s3" {
+              bucket       = "${{ vars.TF_STATE_BUCKET }}"
+              key          = "ticket-swarm/dev/terraform.tfstate"
+              region       = "${{ vars.AWS_REGION }}"
+              encrypt      = true
+              use_lockfile = true
+            }
+          }
+          BACKEND
+
+      - run: terraform init -input=false
+      - run: terraform validate
+      - run: terraform plan -input=false -lock-timeout=60s
+
+  # Changes infrastructure: manual only, gated by the "infrastructure" environment
+  # (configure required reviewers in the repository settings).
+  apply:
+    name: Apply / Destroy
+    if: github.event_name == 'workflow_dispatch' && inputs.action != 'plan'
+    runs-on: ubuntu-latest
+    environment: infrastructure
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Prepare inputs
+        run: |
+          printf '%s\n' "${{ secrets.SWARM_SSH_PUBLIC_KEY }}" > "${{ github.workspace }}/ci_key.pub"
+          cat > backend.tf <<BACKEND
+          terraform {
+            backend "s3" {
+              bucket       = "${{ vars.TF_STATE_BUCKET }}"
+              key          = "ticket-swarm/dev/terraform.tfstate"
+              region       = "${{ vars.AWS_REGION }}"
+              encrypt      = true
+              use_lockfile = true
+            }
+          }
+          BACKEND
+
+      - run: terraform init -input=false
+
+      - name: Plan
+        run: |
+          if [ "${{ inputs.action }}" = "destroy" ]; then
+            terraform plan -destroy -input=false -lock-timeout=60s -out=tfplan
+          else
+            terraform plan -input=false -lock-timeout=60s -out=tfplan
+          fi
+
+      - name: Apply
+        run: terraform apply -input=false tfplan
+
+      - name: Outputs
+        if: inputs.action == 'apply'
+        run: terraform output

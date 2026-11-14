@@ -1,0 +1,60 @@
+#!/bin/bash
+# Swarm WORKER bootstrap (EC2 user-data, rendered by Terraform).
+# Installs Docker, then polls SSM Parameter Store until the manager has published
+# its address and join token, and joins the swarm. Safe if the manager is slower.
+# Log: /var/log/swarm-bootstrap.log
+set -euo pipefail
+exec > >(tee -a /var/log/swarm-bootstrap.log) 2>&1
+export DEBIAN_FRONTEND=noninteractive
+
+echo "[bootstrap] worker start: $(date -Is)"
+
+apt-get update -y
+apt-get install -y ca-certificates curl unzip jq
+
+if ! command -v aws >/dev/null 2>&1; then
+  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+  unzip -q /tmp/awscliv2.zip -d /tmp
+  /tmp/aws/install
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+  curl -fsSL https://get.docker.com | sh
+fi
+
+mkdir -p /etc/docker
+cat > /etc/docker/daemon.json <<'JSON'
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "10m", "max-file": "3" }
+}
+JSON
+systemctl enable docker
+systemctl restart docker
+usermod -aG docker ubuntu
+
+joined=0
+for attempt in $(seq 1 90); do
+  MANAGER_ADDR="$(aws ssm get-parameter --region "${region}" --name "${ssm_prefix}/manager-addr" \
+    --query Parameter.Value --output text 2>/dev/null || echo pending)"
+  JOIN_TOKEN="$(aws ssm get-parameter --region "${region}" --name "${ssm_prefix}/worker-token" \
+    --with-decryption --query Parameter.Value --output text 2>/dev/null || echo pending)"
+
+  if [ "$MANAGER_ADDR" != "pending" ] && [ "$JOIN_TOKEN" != "pending" ]; then
+    if docker swarm join --token "$JOIN_TOKEN" "$MANAGER_ADDR"; then
+      joined=1
+      break
+    fi
+  fi
+
+  echo "[bootstrap] manager not ready yet (attempt $attempt/90), retrying in 10s"
+  sleep 10
+done
+
+if [ "$joined" -ne 1 ]; then
+  echo "[bootstrap] FAILED to join the swarm" >&2
+  exit 1
+fi
+
+touch /var/lib/swarm-bootstrap.done
+echo "[bootstrap] worker joined: $(date -Is)"

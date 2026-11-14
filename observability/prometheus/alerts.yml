@@ -1,0 +1,118 @@
+groups:
+  # ------------------------------------------------------------ availability
+  - name: availability
+    rules:
+      - alert: AppDown
+        expr: probe_success{job="app-health-service"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Ticket app is down (health check failing through the Swarm VIP)"
+          description: "/health has not returned 200 for 2 minutes. Run: docker service ps ticket_app --no-trunc"
+
+      - alert: AppReplicaUnhealthy
+        expr: probe_success{job="app-health-tasks"} == 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "App replica {{ $labels.instance }} is failing health checks"
+
+      - alert: AppReplicasDegraded
+        expr: sum(probe_success{job="app-health-tasks"}) < 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fewer than 2 healthy app replicas"
+          description: "Redundancy is lost. Check node status with: docker node ls"
+
+      - alert: AppSlowHealthCheck
+        expr: probe_duration_seconds{job="app-health-service"} > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Health check latency above 1s for 10 minutes"
+
+      - alert: ScrapeTargetDown
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scrape target {{ $labels.job }}/{{ $labels.instance }} is down"
+
+  # ------------------------------------------------------------ application quality
+  - name: application
+    rules:
+      # success_rate is only meaningful once queries exist (app returns 0 when idle).
+      - alert: AppLowSuccessRate
+        expr: ticket_success_ratio < 0.9 and ticket_queries_total > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Resolution success rate below 90% on {{ $labels.instance }}"
+
+      - alert: AppLowConfidence
+        expr: ticket_recent_avg_confidence < 0.3 and ticket_recent_queries > 20
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "Average RAG confidence is low on {{ $labels.instance }}"
+          description: "Knowledge base may not cover current ticket topics. Consider rebuilding it."
+
+      - alert: AppSlowResponses
+        expr: ticket_recent_avg_response_ms > 3000 and ticket_recent_queries > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Average resolution latency above 3s on {{ $labels.instance }}"
+
+  # ------------------------------------------------------------ infrastructure
+  - name: infrastructure
+    rules:
+      - alert: NodeHighCPU
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU above 85% on {{ $labels.instance }}"
+
+      - alert: NodeHighMemory
+        expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory above 90% on {{ $labels.instance }}"
+
+      - alert: NodeDiskLow
+        expr: (node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}) * 100 < 15
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Less than 15% disk free on {{ $labels.instance }}"
+
+      - alert: ContainerHighMemory
+        expr: |
+          (container_memory_working_set_bytes{name!=""} / container_spec_memory_limit_bytes{name!=""} > 0.9)
+          and container_spec_memory_limit_bytes{name!=""} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} is using over 90% of its memory limit"
+
+      - alert: ContainerRestarting
+        expr: changes(container_start_time_seconds{name!=""}[15m]) > 2
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} restarted more than twice in 15 minutes"

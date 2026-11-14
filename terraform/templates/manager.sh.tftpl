@@ -1,0 +1,56 @@
+#!/bin/bash
+# Swarm MANAGER bootstrap (EC2 user-data, rendered by Terraform).
+# Installs Docker, initialises the swarm and publishes the worker join token and
+# the manager address to SSM Parameter Store, where workers pick them up.
+# Log: /var/log/swarm-bootstrap.log
+set -euo pipefail
+exec > >(tee -a /var/log/swarm-bootstrap.log) 2>&1
+export DEBIAN_FRONTEND=noninteractive
+
+echo "[bootstrap] manager start: $(date -Is)"
+
+apt-get update -y
+apt-get install -y ca-certificates curl unzip jq
+
+# --- AWS CLI v2
+if ! command -v aws >/dev/null 2>&1; then
+  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+  unzip -q /tmp/awscliv2.zip -d /tmp
+  /tmp/aws/install
+fi
+
+# --- Docker Engine
+if ! command -v docker >/dev/null 2>&1; then
+  curl -fsSL https://get.docker.com | sh
+fi
+
+# Rotate container logs so they cannot fill the root volume.
+# (Do not enable "live-restore": it is incompatible with swarm mode.)
+mkdir -p /etc/docker
+cat > /etc/docker/daemon.json <<'JSON'
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "10m", "max-file": "3" }
+}
+JSON
+systemctl enable docker
+systemctl restart docker
+usermod -aG docker ubuntu
+
+# --- Swarm init (IMDSv2 for the private IP)
+IMDS_TOKEN="$(curl -fsS -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 300')"
+PRIVATE_IP="$(curl -fsS -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4)"
+
+if [ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]; then
+  docker swarm init --advertise-addr "$PRIVATE_IP"
+fi
+
+WORKER_TOKEN="$(docker swarm join-token -q worker)"
+
+aws ssm put-parameter --region "${region}" --name "${ssm_prefix}/worker-token" \
+  --type SecureString --overwrite --value "$WORKER_TOKEN" >/dev/null
+aws ssm put-parameter --region "${region}" --name "${ssm_prefix}/manager-addr" \
+  --type String --overwrite --value "$PRIVATE_IP:2377" >/dev/null
+
+touch /var/lib/swarm-bootstrap.done
+echo "[bootstrap] manager ready: $(date -Is)"

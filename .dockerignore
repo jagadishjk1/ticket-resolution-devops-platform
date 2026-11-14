@@ -1,0 +1,15 @@
+**/.git
+**/node_modules
+**/dist
+**/__pycache__
+**/*.pyc
+**/.env
+**/.env.*
+app/.nixpacks
+app/*.bat
+terraform
+docs
+observability
+.github
+*.md
+!app/backend/**/*.md

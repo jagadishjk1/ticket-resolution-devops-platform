@@ -1,0 +1,322 @@
+# Docker Swarm stack: application + full observability platform.
+#
+# Deploy with scripts/deploy.sh (it exports the variables below, creates the
+# secrets and runs `docker stack deploy`). Variables:
+#   APP_IMAGE        image to run              (required)
+#   APP_REPLICAS     app replicas              (default 2)
+#   APP_PORT         published HTTP port       (default 80)
+#   CONFIG_VERSION   hash of ./observability   (required; makes Swarm configs immutable-safe)
+#
+# Swarm configs are immutable, so each config name carries CONFIG_VERSION.
+# Changing a file under ./observability changes the hash and triggers a rolling update.
+
+version: "3.8"
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # ---------------------------------------------------------------- application
+  app:
+    image: ${APP_IMAGE}
+    environment:
+      PORT: "8000"
+      TOP_K_SIMILAR: "5"
+      MIN_SIMILARITY: "0.25"
+    secrets:
+      - huggingface_api_token
+    networks:
+      - edge
+      - monitoring
+    ports:
+      - target: 8000
+        published: ${APP_PORT:-80}
+        protocol: tcp
+        mode: ingress
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    logging: *default-logging
+    deploy:
+      replicas: ${APP_REPLICAS:-2}
+      update_config:
+        parallelism: 1
+        delay: 15s
+        order: start-first        # zero-downtime: new task must be healthy before old one stops
+        failure_action: rollback
+        monitor: 30s
+      rollback_config:
+        parallelism: 1
+        order: start-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 5
+        window: 60s
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+      placement:
+        max_replicas_per_node: 2
+        preferences:
+          - spread: node.id       # spread replicas across nodes
+
+  # ---------------------------------------------------------------- metrics
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    configs:
+      - source: prometheus_yml
+        target: /etc/prometheus/prometheus.yml
+      - source: prometheus_rules
+        target: /etc/prometheus/rules/alerts.yml
+    volumes:
+      - prometheus_data:/prometheus
+    networks:
+      - monitoring
+    ports:
+      - target: 9090
+        published: 9090
+        protocol: tcp
+        mode: ingress
+    logging: *default-logging
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+      resources:
+        limits:
+          memory: 1G
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    configs:
+      - source: alertmanager_yml
+        target: /etc/alertmanager/alertmanager.yml
+    volumes:
+      - alertmanager_data:/alertmanager
+    networks:
+      - monitoring
+    ports:
+      - target: 9093
+        published: 9093
+        protocol: tcp
+        mode: ingress
+    logging: *default-logging
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+      resources:
+        limits:
+          memory: 256M
+
+  blackbox:
+    image: prom/blackbox-exporter:v0.25.0
+    command: ["--config.file=/etc/blackbox/blackbox.yml"]
+    configs:
+      - source: blackbox_yml
+        target: /etc/blackbox/blackbox.yml
+    networks:
+      - monitoring
+    logging: *default-logging
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 128M
+
+  # Translates the app's JSON endpoints (/api/metrics, /api/metrics/realtime)
+  # into Prometheus metrics, so the upstream app needs no code changes.
+  json-exporter:
+    image: prometheuscommunity/json-exporter:v0.6.0
+    command: ["--config.file=/config/config.yml"]
+    configs:
+      - source: json_exporter_yml
+        target: /config/config.yml
+    networks:
+      - monitoring
+    logging: *default-logging
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 128M
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.1
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|run/credentials/.+)($$|/)
+    volumes:
+      - /:/host:ro
+    networks:
+      - monitoring
+    logging: *default-logging
+    deploy:
+      mode: global                  # one per node
+      resources:
+        limits:
+          memory: 128M
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=30s
+      - --store_container_labels=false
+      - --whitelisted_container_labels=com.docker.swarm.service.name,com.docker.swarm.task.name
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - monitoring
+    logging: *default-logging
+    deploy:
+      mode: global
+      resources:
+        limits:
+          memory: 256M
+
+  # ---------------------------------------------------------------- logs
+  loki:
+    image: grafana/loki:2.9.8
+    command: ["-config.file=/etc/loki/loki.yml"]
+    configs:
+      - source: loki_yml
+        target: /etc/loki/loki.yml
+    volumes:
+      - loki_data:/loki
+    networks:
+      - monitoring
+    logging: *default-logging
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+      resources:
+        limits:
+          memory: 512M
+
+  promtail:
+    image: grafana/promtail:2.9.8
+    command: ["-config.file=/etc/promtail/promtail.yml"]
+    configs:
+      - source: promtail_yml
+        target: /etc/promtail/promtail.yml
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - monitoring
+    logging: *default-logging
+    deploy:
+      mode: global
+      resources:
+        limits:
+          memory: 128M
+
+  # ---------------------------------------------------------------- dashboards
+  grafana:
+    image: grafana/grafana:10.4.5
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/ticket-system.json
+    secrets:
+      - grafana_admin_password
+    configs:
+      - source: grafana_datasources
+        target: /etc/grafana/provisioning/datasources/datasources.yml
+      - source: grafana_dashboard_provider
+        target: /etc/grafana/provisioning/dashboards/provider.yml
+      - source: grafana_dashboard_ticket
+        target: /etc/grafana/dashboards/ticket-system.json
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - monitoring
+    ports:
+      - target: 3000
+        published: 3000
+        protocol: tcp
+        mode: ingress
+    logging: *default-logging
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+      resources:
+        limits:
+          memory: 512M
+
+networks:
+  edge:
+    driver: overlay
+  monitoring:
+    driver: overlay
+
+volumes:
+  prometheus_data:
+  alertmanager_data:
+  loki_data:
+  grafana_data:
+
+secrets:
+  huggingface_api_token:
+    external: true
+  grafana_admin_password:
+    external: true
+
+configs:
+  prometheus_yml:
+    file: ./observability/prometheus/prometheus.yml
+    name: prometheus_yml_${CONFIG_VERSION}
+  prometheus_rules:
+    file: ./observability/prometheus/alerts.yml
+    name: prometheus_rules_${CONFIG_VERSION}
+  alertmanager_yml:
+    file: ./observability/alertmanager/alertmanager.yml
+    name: alertmanager_yml_${CONFIG_VERSION}
+  blackbox_yml:
+    file: ./observability/blackbox/blackbox.yml
+    name: blackbox_yml_${CONFIG_VERSION}
+  json_exporter_yml:
+    file: ./observability/json-exporter/config.yml
+    name: json_exporter_yml_${CONFIG_VERSION}
+  loki_yml:
+    file: ./observability/loki/loki.yml
+    name: loki_yml_${CONFIG_VERSION}
+  promtail_yml:
+    file: ./observability/promtail/promtail.yml
+    name: promtail_yml_${CONFIG_VERSION}
+  grafana_datasources:
+    file: ./observability/grafana/provisioning/datasources/datasources.yml
+    name: grafana_datasources_${CONFIG_VERSION}
+  grafana_dashboard_provider:
+    file: ./observability/grafana/provisioning/dashboards/provider.yml
+    name: grafana_dashboard_provider_${CONFIG_VERSION}
+  grafana_dashboard_ticket:
+    file: ./observability/grafana/dashboards/ticket-system.json
+    name: grafana_dashboard_ticket_${CONFIG_VERSION}

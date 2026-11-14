@@ -1,0 +1,35 @@
+# Alertmanager routing. Out of the box alerts are visible in the Alertmanager UI
+# (:9093) and in Grafana. To be notified, uncomment ONE receiver below and
+# supply real values (do not commit secrets: use the Swarm secret/`*_file` options).
+route:
+  receiver: default
+  group_by: [alertname, severity]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: ['severity="critical"']
+      receiver: default
+      repeat_interval: 1h
+
+inhibit_rules:
+  # A critical alert silences the warning of the same name on the same instance.
+  - source_matchers: ['severity="critical"']
+    target_matchers: ['severity="warning"']
+    equal: [alertname, instance]
+
+receivers:
+  - name: default
+    # --- Slack example
+    # slack_configs:
+    #   - api_url_file: /run/secrets/slack_webhook_url
+    #     channel: "#alerts"
+    #     send_resolved: true
+    # --- E-mail example
+    # email_configs:
+    #   - to: oncall@example.com
+    #     from: alertmanager@example.com
+    #     smarthost: smtp.example.com:587
+    #     auth_username: alertmanager@example.com
+    #     auth_password_file: /run/secrets/smtp_password
+    #     send_resolved: true

@@ -1,0 +1,37 @@
+# One Promtail task per node (global service). It discovers containers through the
+# local Docker socket and ships their stdout/stderr to Loki with Swarm labels,
+# so logs can be filtered by service, stack and node in Grafana Explore.
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: swarm-containers
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 15s
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_label_com_docker_swarm_service_name']
+        target_label: service
+      - source_labels: ['__meta_docker_container_label_com_docker_stack_namespace']
+        target_label: stack
+      - source_labels: ['__meta_docker_container_label_com_docker_swarm_node_id']
+        target_label: node_id
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: container
+      - replacement: swarm
+        target_label: job
+    pipeline_stages:
+      # The upstream app logs plain "LEVEL:logger:message" lines (python logging).
+      - regex:
+          expression: '^(?P<level>DEBUG|INFO|WARNING|ERROR|CRITICAL):'
+      - labels:
+          level:

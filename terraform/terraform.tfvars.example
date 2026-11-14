@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars and edit. terraform.tfvars is git-ignored.
+
+region       = "ap-south-1"
+project_name = "ticket-swarm"
+environment  = "dev"
+
+# REQUIRED: your public IP(s) in CIDR form (find it: curl -s https://checkip.amazonaws.com)
+# Grants access to SSH, Grafana, Prometheus and Alertmanager. 0.0.0.0/0 is rejected.
+admin_cidrs = ["203.0.113.10/32"]
+
+public_key_path = "~/.ssh/id_ed25519.pub"
+
+manager_instance_type = "t3.medium"
+worker_instance_type  = "t3.small"
+worker_count          = 2
