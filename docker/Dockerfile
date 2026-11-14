@@ -17,7 +17,7 @@ WORKDIR /build/frontend
 ARG FRONTEND_BUILD_CMD="npm run build"
 
 COPY app/frontend/package.json app/frontend/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci
+RUN --mount=type=cache,target=/root/.npm npm install --no-audit --no-fund
 
 COPY app/frontend/ ./
 RUN sh -c "${FRONTEND_BUILD_CMD}"
